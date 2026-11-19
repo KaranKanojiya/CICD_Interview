@@ -1,6 +1,9 @@
 services:
   jenkins:
-    build: .
+    build:
+      context: .
+      args:
+        JENKINS_UC_DOWNLOAD_URL: ${JENKINS_UC_DOWNLOAD_URL:-}
     image: cicd-demo-jenkins
     container_name: cicd-demo-jenkins
     ports:

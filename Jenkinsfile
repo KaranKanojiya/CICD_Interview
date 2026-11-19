@@ -86,6 +86,7 @@ pipeline {
             when {
                 expression { params.DEPLOY_PROD }
             }
+            // Holds the executor while waiting. With real agents: top-level `agent none`, per-stage agents, stash/unstash.
             steps {
                 timeout(time: 15, unit: 'MINUTES') {
                     input message: "Promote ${env.APP_VERSION} to prod?", ok: 'Deploy'
