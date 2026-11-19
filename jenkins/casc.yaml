@@ -1,0 +1,36 @@
+# Jenkins Configuration as Code: the whole controller is rebuilt from this file - no clicking in the UI.
+jenkins:
+  systemMessage: "cicd-demo Jenkins - configured by JCasC"
+  numExecutors: 2            # demo only; in production the controller runs 0 executors and builds go to agents
+  mode: NORMAL
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: admin
+          password: "${JENKINS_ADMIN_PASSWORD}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+  crumbIssuer:
+    standard:
+      excludeClientIPFromCrumb: false
+
+unclassified:
+  location:
+    url: "http://localhost:8081/"
+  globalLibraries:
+    libraries:
+      - name: "cicd-lib"
+        defaultVersion: "main"
+        implicit: false
+        allowVersionOverride: true
+        retriever:
+          modernSCM:
+            libraryPath: "jenkins/shared-library/"
+            scm:
+              git:
+                remote: "file:///workspace-repo"
+
+jobs:
+  - file: /usr/share/jenkins/ref/jobs.groovy

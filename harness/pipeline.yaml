@@ -1,0 +1,226 @@
+# Reference Harness CD pipeline (NextGen YAML). Not runnable without a Harness account,
+# delegate, connectors and a service/environment set up - see harness/README.md.
+pipeline:
+  name: cicd-demo
+  identifier: cicd_demo
+  projectIdentifier: interview_demo
+  orgIdentifier: default
+  tags:
+    team: backend
+  properties:
+    ci:
+      codebase:
+        connectorRef: github_karan
+        repoName: CICD_Interview
+        build: <+input>
+  variables:
+    - name: skipCanary
+      type: String
+      value: <+input>.default(false).allowedValues(true,false)
+  notificationRules:
+    - name: failures
+      identifier: failures
+      pipelineEvents:
+        - type: PipelineFailed
+      notificationMethod:
+        type: Slack
+        spec:
+          webhookUrl: <+secrets.getValue("slack_deployments_webhook")>
+      enabled: true
+  stages:
+    - stage:
+        name: Build
+        identifier: build
+        type: CI
+        spec:
+          cloneCodebase: true
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Gradle build
+                  identifier: gradle_build
+                  spec:
+                    shell: Bash
+                    command: ./gradlew build -PreleaseVersion=<+codebase.tag.replace("v","")> -PgitCommit=<+codebase.shortCommitSha>
+                    reports:
+                      type: JUnit
+                      spec:
+                        paths:
+                          - build/test-results/test/*.xml
+              - step:
+                  type: BuildAndPushDockerRegistry
+                  name: Push image
+                  identifier: push_image
+                  spec:
+                    connectorRef: ghcr_karan
+                    repo: ghcr.io/karankanojiya/cicd_interview
+                    tags:
+                      - <+codebase.tag.replace("v","")>
+
+    - stage:
+        name: Staging
+        identifier: staging
+        type: Deployment
+        spec:
+          deploymentType: Kubernetes
+          service:
+            serviceRef: cicd_demo
+            serviceInputs:
+              serviceDefinition:
+                type: Kubernetes
+                spec:
+                  artifacts:
+                    primary:
+                      primaryArtifactRef: ghcr
+                      sources:
+                        - identifier: ghcr
+                          type: DockerRegistry
+                          spec:
+                            tag: <+codebase.tag.replace("v","")>
+          environment:
+            environmentRef: staging
+            deployToAll: false
+            infrastructureDefinitions:
+              - identifier: staging_k8s
+          execution:
+            steps:
+              - step:
+                  type: K8sRollingDeploy
+                  name: Rolling deploy
+                  identifier: rolling_deploy
+                  timeout: 10m
+                  spec:
+                    skipDryRun: false
+                    pruningEnabled: false
+              - step:
+                  type: Http
+                  name: Smoke test
+                  identifier: smoke_test
+                  timeout: 2m
+                  spec:
+                    url: https://cicd-demo.staging.example.com/actuator/health
+                    method: GET
+                    assertion: <+httpResponseCode> == 200
+            rollbackSteps:
+              - step:
+                  type: K8sRollingRollback
+                  name: Rollback
+                  identifier: rollback
+                  timeout: 10m
+                  spec: {}
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: StageRollback
+
+    - stage:
+        name: Approve prod
+        identifier: approve_prod
+        type: Approval
+        spec:
+          execution:
+            steps:
+              - step:
+                  type: HarnessApproval
+                  name: Release manager approval
+                  identifier: release_manager_approval
+                  timeout: 1h
+                  spec:
+                    approvalMessage: Promote <+codebase.tag.replace("v","")> to prod?
+                    includePipelineExecutionHistory: true
+                    approvers:
+                      userGroups:
+                        - release_managers
+                      minimumCount: 1
+                      disallowPipelineExecutor: true
+
+    - stage:
+        name: Prod
+        identifier: prod
+        type: Deployment
+        spec:
+          deploymentType: Kubernetes
+          service:
+            useFromStage:
+              stage: staging
+          environment:
+            environmentRef: prod
+            deployToAll: false
+            infrastructureDefinitions:
+              - identifier: prod_k8s
+          execution:
+            steps:
+              - stepGroup:
+                  name: Canary
+                  identifier: canary
+                  when:
+                    stageStatus: Success
+                    condition: <+pipeline.variables.skipCanary> == "false"
+                  steps:
+                    - step:
+                        type: K8sCanaryDeploy
+                        name: Canary 10 percent
+                        identifier: canary_deploy
+                        timeout: 10m
+                        spec:
+                          instanceSelection:
+                            type: Count
+                            spec:
+                              count: 1
+                          skipDryRun: false
+                    - step:
+                        type: Verify
+                        name: Continuous verification
+                        identifier: verify
+                        timeout: 2h
+                        spec:
+                          type: Canary
+                          monitoredService:
+                            type: Default
+                            spec: {}
+                          spec:
+                            sensitivity: MEDIUM
+                            duration: 15m
+                            deploymentTag: <+serviceConfig.artifacts.primary.tag>
+                    - step:
+                        type: K8sCanaryDelete
+                        name: Delete canary
+                        identifier: canary_delete
+                        timeout: 10m
+                        spec: {}
+              - step:
+                  type: K8sRollingDeploy
+                  name: Rolling deploy
+                  identifier: rolling_deploy
+                  timeout: 15m
+                  spec:
+                    skipDryRun: false
+                    pruningEnabled: false
+            rollbackSteps:
+              - step:
+                  type: K8sCanaryDelete
+                  name: Delete canary
+                  identifier: rollback_canary_delete
+                  timeout: 10m
+                  spec: {}
+              - step:
+                  type: K8sRollingRollback
+                  name: Rollback
+                  identifier: rollback
+                  timeout: 10m
+                  spec: {}
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: StageRollback

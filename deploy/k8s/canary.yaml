@@ -1,0 +1,37 @@
+# Canary track: 1 pod next to 4 stable pods, about 20 percent of traffic through the shared Service.
+# For exact percentages use a mesh or ingress weights (Istio, Argo Rollouts, ALB weighted target groups).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cicd-demo-canary
+  namespace: cicd-demo
+  labels:
+    app: cicd-demo
+    track: canary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cicd-demo
+      track: canary
+  template:
+    metadata:
+      labels:
+        app: cicd-demo
+        track: canary
+    spec:
+      containers:
+        - name: app
+          image: ghcr.io/karankanojiya/cicd_interview
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+          resources:
+            requests:
+              cpu: 250m
+              memory: 384Mi
+            limits:
+              memory: 512Mi

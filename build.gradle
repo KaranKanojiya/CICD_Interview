@@ -1,0 +1,54 @@
+plugins {
+    id 'java'
+    id 'jacoco'
+    id 'org.springframework.boot' version '4.1.2'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.interview'
+// The pipeline passes the release version (-PreleaseVersion=1.4.0, taken from the git tag).
+// Local builds are snapshots. Build once with a version, then promote the same artifact.
+version = findProperty('releaseVersion') ?: '0.0.0-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-actuator-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// Writes META-INF/build-info.properties (version, time, artifact) -> exposed at /actuator/info and /api/version.
+springBoot {
+    buildInfo {
+        properties {
+            additional = ['commit': findProperty('gitCommit') ?: 'local']
+        }
+    }
+}
+
+tasks.named('bootJar') {
+    archiveFileName = "cicd-demo-${version}.jar"
+}
+tasks.named('jar') { enabled = false }
+
+tasks.named('test') {
+    useJUnitPlatform()
+    finalizedBy tasks.named('jacocoTestReport')
+    testLogging { events 'passed', 'failed' }
+}
+
+tasks.named('jacocoTestReport') {
+    reports { xml.required = true }
+}

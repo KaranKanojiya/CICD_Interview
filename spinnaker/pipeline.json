@@ -1,0 +1,172 @@
+{
+  "application": "cicddemo",
+  "name": "deploy-cicd-demo",
+  "description": "Reference Spinnaker pipeline: GHCR image tag -> staging -> canary with Kayenta analysis -> manual judgment -> prod. Not runnable without a Spinnaker install; see spinnaker/README.md.",
+  "keepWaitingPipelines": false,
+  "limitConcurrent": true,
+  "parameterConfig": [
+    {
+      "name": "skipCanary",
+      "label": "Skip canary (hotfix only)",
+      "default": "false",
+      "required": true,
+      "hasOptions": true,
+      "options": [{ "value": "false" }, { "value": "true" }]
+    }
+  ],
+  "triggers": [
+    {
+      "type": "docker",
+      "enabled": true,
+      "account": "ghcr",
+      "organization": "karankanojiya",
+      "repository": "karankanojiya/cicd_interview",
+      "tag": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    }
+  ],
+  "notifications": [
+    {
+      "type": "slack",
+      "address": "deployments",
+      "level": "pipeline",
+      "when": ["pipeline.failed", "pipeline.complete"]
+    }
+  ],
+  "stages": [
+    {
+      "refId": "1",
+      "requisiteStageRefIds": [],
+      "type": "deployManifest",
+      "name": "Deploy staging",
+      "account": "staging-k8s",
+      "cloudProvider": "kubernetes",
+      "moniker": { "app": "cicddemo" },
+      "namespaceOverride": "cicd-demo",
+      "source": "artifact",
+      "manifestArtifactId": "k8s-manifest",
+      "requiredArtifactIds": ["ghcr-image"],
+      "skipExpressionEvaluation": false,
+      "trafficManagement": { "enabled": false }
+    },
+    {
+      "refId": "2",
+      "requisiteStageRefIds": ["1"],
+      "type": "webhook",
+      "name": "Smoke test staging",
+      "url": "https://cicd-demo.staging.example.com/actuator/health",
+      "method": "GET",
+      "statusUrlResolution": "getMethod",
+      "failOnFailedExpressions": true,
+      "successStatuses": "UP",
+      "statusJsonPath": "$.status"
+    },
+    {
+      "refId": "3",
+      "requisiteStageRefIds": ["2"],
+      "type": "deployManifest",
+      "name": "Deploy prod canary (1 replica)",
+      "account": "prod-k8s",
+      "cloudProvider": "kubernetes",
+      "moniker": { "app": "cicddemo" },
+      "namespaceOverride": "cicd-demo",
+      "source": "artifact",
+      "manifestArtifactId": "k8s-canary-manifest",
+      "requiredArtifactIds": ["ghcr-image"],
+      "stageEnabled": { "type": "expression", "expression": "${parameters.skipCanary == 'false'}" }
+    },
+    {
+      "refId": "4",
+      "requisiteStageRefIds": ["3"],
+      "type": "kayentaCanary",
+      "name": "Canary analysis",
+      "analysisType": "realTime",
+      "canaryConfig": {
+        "canaryConfigId": "cicd-demo-default",
+        "lifetimeDuration": "PT30M",
+        "beginCanaryAnalysisAfterMins": "5",
+        "canaryAnalysisIntervalMins": "10",
+        "scoreThresholds": { "marginal": "75", "pass": "90" },
+        "metricsAccountName": "prometheus",
+        "storageAccountName": "s3-canary",
+        "scopes": [
+          {
+            "scopeName": "default",
+            "controlScope": "cicd-demo-baseline",
+            "experimentScope": "cicd-demo-canary",
+            "step": 60
+          }
+        ]
+      },
+      "stageEnabled": { "type": "expression", "expression": "${parameters.skipCanary == 'false'}" }
+    },
+    {
+      "refId": "5",
+      "requisiteStageRefIds": ["4"],
+      "type": "manualJudgment",
+      "name": "Approve prod rollout",
+      "instructions": "Canary passed. Promote ${trigger.tag} to all prod replicas?",
+      "judgmentInputs": [{ "value": "Promote" }, { "value": "Stop" }],
+      "failPipeline": true,
+      "selectedStageRoles": ["release-managers"],
+      "stageTimeoutMs": 3600000
+    },
+    {
+      "refId": "6",
+      "requisiteStageRefIds": ["5"],
+      "type": "deployManifest",
+      "name": "Deploy prod (rolling)",
+      "account": "prod-k8s",
+      "cloudProvider": "kubernetes",
+      "moniker": { "app": "cicddemo" },
+      "namespaceOverride": "cicd-demo",
+      "source": "artifact",
+      "manifestArtifactId": "k8s-manifest",
+      "requiredArtifactIds": ["ghcr-image"],
+      "stageEnabled": { "type": "expression", "expression": "${#judgment('Approve prod rollout') == 'Promote'}" }
+    },
+    {
+      "refId": "7",
+      "requisiteStageRefIds": ["6"],
+      "type": "deleteManifest",
+      "name": "Remove canary",
+      "account": "prod-k8s",
+      "cloudProvider": "kubernetes",
+      "location": "cicd-demo",
+      "manifestName": "deployment cicd-demo-canary",
+      "options": { "cascading": true }
+    }
+  ],
+  "expectedArtifacts": [
+    {
+      "id": "ghcr-image",
+      "displayName": "app image",
+      "matchArtifact": { "type": "docker/image", "name": "ghcr.io/karankanojiya/cicd_interview" },
+      "useDefaultArtifact": false,
+      "usePriorArtifact": false
+    },
+    {
+      "id": "k8s-manifest",
+      "displayName": "deployment manifest",
+      "matchArtifact": { "type": "github/file", "name": "deploy/k8s/deployment.yaml" },
+      "useDefaultArtifact": true,
+      "defaultArtifact": {
+        "type": "github/file",
+        "name": "deploy/k8s/deployment.yaml",
+        "reference": "https://api.github.com/repos/KaranKanojiya/CICD_Interview/contents/deploy/k8s/deployment.yaml",
+        "version": "main"
+      }
+    },
+    {
+      "id": "k8s-canary-manifest",
+      "displayName": "canary manifest",
+      "matchArtifact": { "type": "github/file", "name": "deploy/k8s/canary.yaml" },
+      "useDefaultArtifact": true,
+      "defaultArtifact": {
+        "type": "github/file",
+        "name": "deploy/k8s/canary.yaml",
+        "reference": "https://api.github.com/repos/KaranKanojiya/CICD_Interview/contents/deploy/k8s/canary.yaml",
+        "version": "main"
+      }
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+# Release: runs when an annotated tag vX.Y.Z is pushed (scripts/release.sh creates it).
+# Builds the jar with that exact version, publishes a container image to GHCR,
+# attaches build provenance, and creates the GitHub Release from the tag notes.
+name: release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write       # create the GitHub Release
+      packages: write       # push to ghcr.io
+      id-token: write       # OIDC token for provenance signing
+      attestations: write   # store the attestation
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # actions/checkout can leave the tag lightweight; re-fetch it so the annotation (release notes) is available.
+      - name: Fetch annotated tag
+        run: git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+
+      - name: Guard - tag must be annotated and reachable from main
+        run: |
+          test "$(git cat-file -t "$TAG")" = tag || { echo "::error::$TAG is not an annotated tag"; exit 1; }
+          git merge-base --is-ancestor "$TAG" origin/main || { echo "::error::$TAG is not on main"; exit 1; }
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Build and test the release version
+        run: ./gradlew build "-PreleaseVersion=${TAG#v}" "-PgitCommit=${GITHUB_SHA::7}"
+
+      - name: Checksum
+        working-directory: build/libs
+        run: sha256sum "cicd-demo-${TAG#v}.jar" > "cicd-demo-${TAG#v}.jar.sha256"
+
+      - name: Attest jar provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: build/libs/cicd-demo-*.jar
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - id: push
+        name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -l --format='%(contents:body)' "$TAG" > notes.md
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file notes.md \
+            --verify-tag \
+            build/libs/cicd-demo-*.jar build/libs/cicd-demo-*.jar.sha256
