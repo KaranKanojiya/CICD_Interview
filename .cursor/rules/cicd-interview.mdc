@@ -1,0 +1,10 @@
+---
+description: CI/CD interview prep conventions
+alwaysApply: true
+---
+
+# CI/CD interview project
+
+- Follow `AGENTS.md`. Verify with `./gradlew test`, `bash scripts/test-release-scripts.sh`, `actionlint`, and the Jenkins lab when touching the Jenkinsfile or shared library.
+- Never commit secrets; reference them via env vars, Jenkins credentials or secret-manager expressions.
+- Keep the four pipelines (Actions, Jenkins, Spinnaker, Harness) describing the same flow, and the README comparison table in sync.
