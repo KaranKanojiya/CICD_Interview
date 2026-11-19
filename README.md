@@ -42,6 +42,7 @@ bash scripts/test-release-scripts.sh    # proves the versioning and tagging rule
 - [docs/TOOL_COMPARISON.md](docs/TOOL_COMPARISON.md) — Jenkins vs Actions vs Spinnaker vs Harness vs Argo CD, push vs pull, Actions ↔ Jenkins map
 - [docs/PIPELINE_SECURITY.md](docs/PIPELINE_SECURITY.md) — secrets, OIDC, Actions pitfalls, Jenkins hardening, SLSA/provenance/SBOM
 - [docs/PRODUCTION_STORIES.md](docs/PRODUCTION_STORIES.md) — template to turn your own pipeline work into answers
+- [docs/TALKING_ABOUT_THIS_PROJECT.md](docs/TALKING_ABOUT_THIS_PROJECT.md) — how to present this lab next to your work experience: pitch, answers, self-check
 - [docs/SETUP_MAC.md](docs/SETUP_MAC.md) — install, Jenkins lab, real GitHub release, troubleshooting
 - [spinnaker/README.md](spinnaker/README.md), [harness/README.md](harness/README.md) — architecture and vocabulary
 
